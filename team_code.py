@@ -9,12 +9,13 @@
 #
 ################################################################################
 
-from helper_code import *
 import numpy as np, os, sys
 import mne
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 import joblib
+from helper_code import *
+from vae import VanillaVAE
 
 ################################################################################
 #
@@ -203,19 +204,22 @@ def get_features(patient_metadata, recording_metadata, recording_data):
         delta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=0.5,  fmax=8.0, verbose=False)
         theta_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=4.0,  fmax=8.0, verbose=False)
         alpha_psd, _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency,  fmin=8.0, fmax=12.0, verbose=False)
-        beta_psd,  _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency, fmin=12.0, fmax=30.0, verbose=False)
+        # beta_psd,  _ = mne.time_frequency.psd_array_welch(signal_data, sfreq=sampling_frequency, fmin=12.0, fmax=30.0, verbose=False)
 
         delta_psd_mean = np.nanmean(delta_psd, axis=1)
         theta_psd_mean = np.nanmean(theta_psd, axis=1)
         alpha_psd_mean = np.nanmean(alpha_psd, axis=1)
-        beta_psd_mean  = np.nanmean(beta_psd,  axis=1)
+        # beta_psd_mean  = np.nanmean(beta_psd,  axis=1)
 
         quality_score = get_quality_scores(recording_metadata)[index]
     else:
         delta_psd_mean = theta_psd_mean = alpha_psd_mean = beta_psd_mean = float('nan') * np.ones(num_channels)
         quality_score = float('nan')
 
-    recording_features = np.hstack((signal_mean, signal_std, delta_psd_mean, theta_psd_mean, alpha_psd_mean, beta_psd_mean, quality_score))
+    # deleted beta PSD just to test changes -Adel
+    recording_features = np.hstack(
+        (signal_mean, signal_std, delta_psd_mean, theta_psd_mean, alpha_psd_mean, quality_score)
+    )
 
     # Combine the features from the patient metadata and the recording data and metadata.
     features = np.hstack((patient_features, recording_features))
