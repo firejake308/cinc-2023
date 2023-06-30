@@ -111,6 +111,7 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
 
     # Apply models to features.
     outcome = outcome_model.predict(features)[0]
+    print(outcome_model.predict_proba(features))
     outcome_probability = outcome_model.predict_proba(features)[0, 1]
     cpc = cpc_model.predict(features)[0]
 
@@ -185,7 +186,7 @@ def get_features(data_folder, patient_id):
         recording_id = recording_ids[-1]
         recording_location = os.path.join(data_folder, patient_id, '{}_{}'.format(recording_id, group))
         if os.path.exists(recording_location + '.hea'):
-            data, channels, sampling_frequency = load_recording_data(recording_location)
+            data, channels, sampling_frequency = load_recording_data(recording_location, check_values=False)
             utility_frequency = get_utility_frequency(recording_location + '.hea')
 
             if all(channel in channels for channel in eeg_channels):
@@ -208,7 +209,7 @@ def get_features(data_folder, patient_id):
         recording_id = recording_ids[0]
         recording_location = os.path.join(data_folder, patient_id, '{}_{}'.format(recording_id, group))
         if os.path.exists(recording_location + '.hea'):
-            data, channels, sampling_frequency = load_recording_data(recording_location)
+            data, channels, sampling_frequency = load_recording_data(recording_location, check_values=False)
             utility_frequency = get_utility_frequency(recording_location + '.hea')
 
             data, channels = reduce_channels(data, channels, ecg_channels)
