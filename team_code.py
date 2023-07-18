@@ -186,6 +186,9 @@ def get_features(data_folder, patient_id):
     recording_ids = find_recording_files(data_folder, patient_id)
     num_recordings = len(recording_ids)
 
+    # TODO this line helps skip all EEG/ECG analysis
+    num_recordings = 0
+
     # Extract patient features.
     patient_features = get_patient_features(patient_metadata)
 
@@ -233,7 +236,9 @@ def get_features(data_folder, patient_id):
         ecg_features = float('nan') * np.ones(10) # 5 channels * 2 features / channel
 
     # Extract features.
-    return np.hstack((patient_features, eeg_features, ecg_features))
+    # return np.hstack((patient_features, eeg_features, ecg_features))
+    # TODO restore eeg and ecg features
+    return patient_features
 
 # Extract patient features from the data.
 def get_patient_features(data):
