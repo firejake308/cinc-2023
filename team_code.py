@@ -135,11 +135,11 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
 ################################################################################
 
 def get_latents(vae: VanillaVAE, data_folder, patient_id):
-    
+    pass
 
 # Save your trained model.
-def save_challenge_model(model_folder, imputer, outcome_model, cpc_model):
-    d = {'imputer': imputer, 'outcome_model': outcome_model, 'cpc_model': cpc_model}
+def save_challenge_model(model_folder, imputer, outcome_model, cpc_model, vae):
+    d = {'imputer': imputer, 'outcome_model': outcome_model, 'cpc_model': cpc_model, 'vae': vae}
     filename = os.path.join(model_folder, 'models.sav')
     joblib.dump(d, filename, protocol=0)
 
@@ -185,9 +185,6 @@ def get_features(data_folder, patient_id):
     patient_metadata = load_challenge_data(data_folder, patient_id)
     recording_ids = find_recording_files(data_folder, patient_id)
     num_recordings = len(recording_ids)
-
-    # TODO this line helps skip all EEG/ECG analysis
-    num_recordings = 0
 
     # Extract patient features.
     patient_features = get_patient_features(patient_metadata)
