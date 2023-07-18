@@ -16,6 +16,7 @@ from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 import joblib
 from helper_code import *
 from vae import VanillaVAE
+import torch
 
 ################################################################################
 #
@@ -93,7 +94,13 @@ def train_challenge_model(data_folder, model_folder, verbose):
 # arguments of this function.
 def load_challenge_models(model_folder, verbose):
     filename = os.path.join(model_folder, 'models.sav')
-    return joblib.load(filename)
+    models_dict = joblib.load(filename)
+    fname2 = os.path.join(model_folder, 'vae.pth')
+    vae = VanillaVAE(18, 400, 1024, [512])
+    with open(fname2, 'rb') as f:
+        vae.load_state_dict(torch.load(f))
+    models_dict['vae'] = vae
+    
 
 # Run your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
 # arguments of this function.
@@ -101,6 +108,7 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
     imputer = models['imputer']
     outcome_model = models['outcome_model']
     cpc_model = models['cpc_model']
+    vae = models['vae']
 
     # Extract features.
     features = get_features(data_folder, patient_id)
@@ -125,6 +133,9 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
 # Optional functions. You can change or remove these functions and/or add new functions.
 #
 ################################################################################
+
+def get_latents(vae: VanillaVAE, data_folder, patient_id):
+    
 
 # Save your trained model.
 def save_challenge_model(model_folder, imputer, outcome_model, cpc_model):
