@@ -246,9 +246,9 @@ class VanillaVAE(torch.nn.Module):
         
         y_lab = input
         y_pred = recons
-        amp_shift_loss = wandb.config.alpha*loss_amp_shift(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
-        phase_loss = (1-wandb.config.alpha)*loss_phase(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
-        amp_loss = wandb.config.gamma * loss_amp(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
+        # amp_shift_loss = wandb.config.alpha*loss_amp_shift(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
+        # phase_loss = (1-wandb.config.alpha)*loss_phase(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
+        # amp_loss = wandb.config.gamma * loss_amp(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
         
         # B*M/N, where 0<=B<=1, M = latent size, N = batch size
         kld_weight =  wandb.config.kld_weight_beta*self.latent_dim/kwargs['batch_size'] # kwargs['M_N']
@@ -259,10 +259,10 @@ class VanillaVAE(torch.nn.Module):
         
         return {
             'loss': loss + kld_weight * kld_loss,
-            'loss_amp_shift': amp_shift_loss,
-            'loss_phase': phase_loss,
-            'loss_amp': amp_loss,
-            'loss_tilde': loss,
+            # 'loss_amp_shift': amp_shift_loss,
+            # 'loss_phase': phase_loss,
+            # 'loss_amp': amp_loss,
+            # 'loss_tilde': loss,
             'KLD_Loss': kld_weight * kld_loss,
         }
 

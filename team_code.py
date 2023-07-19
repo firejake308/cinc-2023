@@ -63,7 +63,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
 
     if verbose >= 1:
         print('Training VAE')
-    pt_records = prepare_mmap(data_folder, patient_ids, verbose)
+    pt_records = prepare_mmap(data_folder, model_folder, patient_ids, verbose)
     with torch.autograd.detect_anomaly():
         train_vae(pt_records, model_folder, verbose)
 
@@ -170,7 +170,7 @@ def split_recordings(pt_records, WINDOW_LEN):
     return train_idx
 
 
-def prepare_mmap(data_folder, patient_ids, verbose=1, force_reload=False):
+def prepare_mmap(data_folder, model_folder, patient_ids, verbose=1, force_reload=False):
     if verbose >= 1:
         print('Loading patient records...')
     records = []
@@ -186,7 +186,8 @@ def prepare_mmap(data_folder, patient_ids, verbose=1, force_reload=False):
     if verbose >= 1:
         print('Done loading patient records')
 
-    if not force_reload and os.path.exists('sigdata.npy'):
+    mmap_path = os.path.join(model_folder, 'sigdata.npy')
+    if not force_reload and os.path.exists(mmap_path):
         if verbose >= 1:
             print('Using old memmap')
         return pt_records
@@ -200,7 +201,7 @@ def prepare_mmap(data_folder, patient_ids, verbose=1, force_reload=False):
     
     # load records into a memmap
     # fixed cost of 160 s to save load times by 30-40% per batch later
-    mmap = np.memmap('sigdata.npy', mode='w+', shape=(len(records_idx), 30000, len(wandb.config.channels)), dtype='float32')
+    mmap = np.memmap(mmap_path, mode='w+', shape=(len(records_idx), 30000, len(wandb.config.channels)), dtype='float32')
     scaler = RobustScaler(quantile_range=(10,90))
     for i, row in records_idx.iterrows():
         rec = wfdb.rdrecord(os.path.join(row['Folder'], row['Record']), 
@@ -208,10 +209,6 @@ def prepare_mmap(data_folder, patient_ids, verbose=1, force_reload=False):
         # only read first 5 min
         sig = rec.p_signal[:30_000,:]
         mmap[i] = scaler.fit_transform(sig)
-    # assumes that all recordings have same sig_names in same order
-    sig_names = rec.sig_name
-    with open('sig_names.json', 'w') as f:
-        f.write(json.dumps(sig_names))
     if verbose >= 1:
         print('Done building memmap')
 
@@ -256,7 +253,8 @@ def train_vae(pt_records, model_folder, verbose=1):
 
     # load records into a memmap
     # fixed cost of 160 s to save load times by 30-40% per batch later
-    mmap = np.memmap('sigdata.npy', mode='r', shape=(len(records_idx), 30000, len(wandb.config.channels)), dtype='float32')
+    mmap_path = os.path.join(model_folder, 'sigdata.npy')
+    mmap = np.memmap(mmap_path, mode='r', shape=(len(records_idx), 30000, len(wandb.config.channels)), dtype='float32')
     
     # number of frames in one window (sampled at 100 Hz)
     WINDOW_LEN = wandb.config.window_len
@@ -269,7 +267,7 @@ def train_vae(pt_records, model_folder, verbose=1):
         for i in range(0, len(train_idx)-BATCH_CNT, BATCH_CNT):
             optim.zero_grad()
             
-            # train for 10 hrs max to avoid going over the limit
+            # train for 10 hrs max to get rough results, final code should respect 72-hr limit
             if time.time() > start + 3600 * 10:
                 break
             
