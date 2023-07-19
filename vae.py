@@ -1,13 +1,9 @@
-import numpy as np # linear algebra
-import pandas as pd # data processing, CSV file I/O (e.g. pd.read_csv)
-
-import matplotlib.pyplot as plt
-import scipy.stats
-import torch
 import torch
 import torch.nn.functional as F
-import matplotlib.pyplot as plt
-import numpy as np
+from torch import nn
+from torch import Tensor
+from typing import List
+import wandb
 
 def sdf(y_lab, y_pred):
     '''signed distance function. idk how to implement this, so I'm just going to
@@ -23,12 +19,13 @@ def normalize(data):
         neginf=0.0,
     )
 
-def loss_amp_shift(y_lab, y_pred):
+def loss_amp_shift(y_lab, y_pred, rand_weight=1):
     T_prime = y_lab.shape[-1]
-    return T_prime * torch.sum(
-        torch.abs(1 / T_prime - F.softmax(sdf(y_lab, y_pred), dim=-1)))
+    per_el_loss = T_prime * torch.sum(
+        torch.abs(1 / T_prime - F.softmax(sdf(y_lab, y_pred), dim=-1)), dim=(-2, -1))
+    return torch.mean(per_el_loss * rand_weight)
 
-def loss_phase(y_lab, y_pred):
+def loss_phase(y_lab, y_pred, rand_weight=1):
     fft_lab = torch.fft.rfft(y_lab).abs()
     fft_pred = torch.fft.rfft(y_pred).abs()
     
@@ -41,11 +38,16 @@ def loss_phase(y_lab, y_pred):
 #         for j in range(len(mask[i])):
 #             temp_eeg[i, j, win_max[i][j][mask[i][j]]] = 1
 #     new_eeg = torch.where(temp_eeg == 1, fft_lab, 0)
-    new_eeg = fft_lab
     
-    return torch.norm(new_eeg - fft_pred)
+    eps = 1e-7
+    norm_lab  = fft_lab  / (torch.topk(fft_lab,  k=5, dim=2).values[:,:,4].unsqueeze(2) + eps)
+    norm_pred = fft_pred / (torch.topk(fft_pred, k=5, dim=2).values[:,:,4].unsqueeze(2) + eps)
+    weighted_diff = norm_lab - norm_pred
+    
+    per_el_loss = torch.linalg.matrix_norm(weighted_diff)
+    return torch.mean(per_el_loss * rand_weight)
 
-def loss_amp(y_lab, y_pred):
+def loss_amp(y_lab, y_pred, rand_weight=1):
     if len(y_lab.shape) != 3:
         raise NotImplemented()
 #     auto_corr = torch.nan_to_num(F.conv1d(y_lab, y_lab).div(y_lab.std(dim=-1)), nan=0.0, posinf=0.0, neginf=0.0)
@@ -69,20 +71,17 @@ def loss_amp(y_lab, y_pred):
     # formula taken from https://xcdskd.readthedocs.io/en/latest/cross_correlation/cross_correlation_coefficient.html
 #     auto_corr = torch.sum(normalize(y_lab)*normalize(y_lab)) / (y_lab.reshape(-1).size()[0]-1)
 #     cross_corr = torch.sum(normalize(y_lab)*normalize(y_pred)) / (y_lab.reshape(-1).size()[0]-1)
-    return torch.norm(auto_corr - cross_corr)
+    
+    # for generic TILDE-Q, we would just return the mean of per-element loss
+    per_el_loss = torch.linalg.matrix_norm(auto_corr - cross_corr)
+    return torch.mean(per_el_loss * rand_weight)
 
 def loss_tilde(y_lab, y_pred, alpha=0.04, gamma=0.03):
+    # WARNING: does not have rand_weight, not meant to be used here. For reference only
     assert alpha > 0 and alpha < 1
     return alpha*loss_amp_shift(y_lab, y_pred) \
     + (1-alpha)*loss_phase(y_lab, y_pred) \
     + gamma * loss_amp(y_lab, y_pred)
-
-
-import torch
-from torch import nn
-from torch.nn import functional as F
-from torch import Tensor
-from typing import List
 
 
 class VanillaVAE(torch.nn.Module):
@@ -97,6 +96,7 @@ class VanillaVAE(torch.nn.Module):
         super(VanillaVAE, self).__init__()
 
         self.latent_dim = latent_dim
+        self.batch_num = 0
         
         in_channels_init = in_channels
 
@@ -114,7 +114,6 @@ class VanillaVAE(torch.nn.Module):
                               kernel_size= 3, stride= 2, padding  = 1),
                     nn.BatchNorm1d(h_dim),
                     nn.LeakyReLU())
-#                 ForwardResidualBlock(in_channels, h_dim),
             )
             in_channels = h_dim
 
@@ -133,13 +132,13 @@ class VanillaVAE(torch.nn.Module):
         for i in range(len(hidden_dims) - 1):
             modules.append(
                 nn.Sequential(
-                    nn.ConvTranspose1d(hidden_dims[i],
-                                       hidden_dims[i + 1],
+                    nn.ConvTranspose1d(2*hidden_dims[i],
+                                       2*hidden_dims[i + 1],
                                        kernel_size=3,
                                        stride = 2,
                                        padding=1,
                                        output_padding=1),
-                    nn.BatchNorm1d(hidden_dims[i + 1]),
+                    nn.BatchNorm1d(2*hidden_dims[i + 1]),
                     nn.LeakyReLU())
             )
 
@@ -148,18 +147,18 @@ class VanillaVAE(torch.nn.Module):
         self.decoder = nn.Sequential(*modules)
 
         self.final_layer = nn.Sequential(
-                            nn.ConvTranspose1d(hidden_dims[-1],
-                                               hidden_dims[-1],
+                            nn.ConvTranspose1d(2*hidden_dims[-1],
+                                               2*hidden_dims[-1],
                                                kernel_size=3,
                                                stride=2,
                                                padding=1,
                                                output_padding=1),
-                            nn.BatchNorm1d(hidden_dims[-1]),
+                            nn.BatchNorm1d(2*hidden_dims[-1]),
                             nn.LeakyReLU(),
-                            nn.Conv1d(hidden_dims[-1], out_channels= in_channels_init,
+                            nn.Conv1d(2*hidden_dims[-1], out_channels= in_channels_init,
                                       kernel_size= 3, padding= 1),
                             nn.Tanh())
-
+        
     def encode(self, input: Tensor) -> List[Tensor]:
         """
         Encodes the input by passing through the encoder network
@@ -177,7 +176,7 @@ class VanillaVAE(torch.nn.Module):
 
         return [mu, log_var]
 
-    def decode(self, z: Tensor) -> Tensor:
+    def decode(self, z: Tensor, shuffled_inp: Tensor) -> Tensor:
         """
         Maps the given latent codes
         onto the image space.
@@ -188,8 +187,15 @@ class VanillaVAE(torch.nn.Module):
         # 4 comes from taking 128 initial samples and halving once for each conv layer (stride=2, so half)
         # -Adel
         result = result.view(-1, self.last_hidden_dim, self.end_conv_len)
+        # add shuffled input as another set of channels
+        inp_enc = self.encoder(shuffled_inp)
+        result = torch.cat((result, inp_enc), dim=1)
+        
         result = self.decoder(result)
-        result = self.final_layer(result)
+        # multiplying by 2 here because with 10-90% RobustScaler,
+        # some values will be as high as 2 or sometimes even 3 after
+        # standardization
+        result = 2*self.final_layer(result)
         return result
 
     def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
@@ -202,12 +208,26 @@ class VanillaVAE(torch.nn.Module):
         """
         std = torch.exp(0.5 * logvar)
         eps = torch.randn_like(std)
-        return mu # eps * std + mu
+        return eps * std + mu
 
-    def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
+    def forward(self, input: Tensor, rand_prob: float, **kwargs) -> List[Tensor]:
         mu, log_var = self.encode(input)
         z = self.reparameterize(mu, log_var)
-        return  [self.decode(z), input, mu, log_var]
+        
+        shuffled_inp = input.clone()
+        self.batch_num += 1
+        # shuffle some of the values along the time axis
+        for i in range(64):
+            perm_idx = torch.randperm(1024)
+            mixed_idx = torch.where(torch.rand(1024) < rand_prob[i], perm_idx, torch.arange(1024))
+            shuffled_inp[i] = shuffled_inp[i,:,mixed_idx]
+        # add baseline noise
+        rand_resized = rand_prob.repeat(input.shape[2], input.shape[1], 1)
+        rand_resized = rand_resized.permute(2, 1, 0)
+        shuffled_inp = torch.normal(shuffled_inp, rand_resized * 0.01)
+        # randomly erase some of the amplitudes
+        shuffled_inp = torch.where(torch.rand(shuffled_inp.size()) < rand_resized, torch.tensor(0).float(), shuffled_inp)
+        return  [self.decode(z, shuffled_inp), input, mu, log_var]
 
     def loss_function(self,
                       *args,
@@ -226,19 +246,19 @@ class VanillaVAE(torch.nn.Module):
         
         y_lab = input
         y_pred = recons
-        amp_shift_loss = wandb.config.alpha*loss_amp_shift(y_lab, y_pred)
-        phase_loss = (1-wandb.config.alpha)*loss_phase(y_lab, y_pred)
-        amp_loss = wandb.config.gamma * loss_amp(y_lab, y_pred)
+        amp_shift_loss = wandb.config.alpha*loss_amp_shift(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
+        phase_loss = (1-wandb.config.alpha)*loss_phase(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
+        amp_loss = wandb.config.gamma * loss_amp(y_lab, y_pred, rand_weight=2*kwargs['rand_prob'])
         
         # B*M/N, where 0<=B<=1, M = latent size, N = batch size
         kld_weight =  wandb.config.kld_weight_beta*self.latent_dim/kwargs['batch_size'] # kwargs['M_N']
         kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
         
-        loss = amp_shift_loss + phase_loss + amp_loss
-#         loss = F.mse_loss(y_pred, y_lab)
+        per_el_loss = torch.mean(F.mse_loss(y_pred, y_lab, reduction='none'), dim=(1,2)) * kwargs['rand_prob']
+        loss = torch.mean(per_el_loss) # amp_shift_loss + phase_loss + amp_loss
         
         return {
-            'loss': amp_loss, # loss + kld_weight * kld_loss,
+            'loss': loss + kld_weight * kld_loss,
             'loss_amp_shift': amp_shift_loss,
             'loss_phase': phase_loss,
             'loss_amp': amp_loss,
@@ -271,4 +291,4 @@ class VanillaVAE(torch.nn.Module):
         :return: (Tensor) [B x C x H x W]
         """
 
-        return self.forward(x)[0]
+        return self.forward(x, 1)[0]

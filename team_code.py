@@ -9,7 +9,8 @@
 #
 ################################################################################
 
-import numpy as np, os, sys
+import numpy as np, os, sys, time, json
+import pandas as pd
 import mne
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
@@ -17,6 +18,9 @@ import joblib
 from helper_code import *
 from vae import VanillaVAE
 import torch
+import wfdb
+import wandb # just a shim
+from sklearn.preprocessing import RobustScaler
 
 ################################################################################
 #
@@ -39,10 +43,6 @@ def train_challenge_model(data_folder, model_folder, verbose):
     # Create a folder for the model if it does not already exist.
     os.makedirs(model_folder, exist_ok=True)
 
-    # Extract the features and labels.
-    if verbose >= 1:
-        print('Extracting features and labels from the Challenge data...')
-
     features = list()
     outcomes = list()
     cpcs = list()
@@ -51,9 +51,6 @@ def train_challenge_model(data_folder, model_folder, verbose):
         if verbose >= 2:
             print('    {}/{}...'.format(i+1, num_patients))
 
-        current_features = get_features(data_folder, patient_ids[i])
-        features.append(current_features)
-
         # Extract labels.
         patient_metadata = load_challenge_data(data_folder, patient_ids[i])
         current_outcome = get_outcome(patient_metadata)
@@ -61,9 +58,29 @@ def train_challenge_model(data_folder, model_folder, verbose):
         current_cpc = get_cpc(patient_metadata)
         cpcs.append(current_cpc)
 
-    features = np.vstack(features)
     outcomes = np.vstack(outcomes)
     cpcs = np.vstack(cpcs)
+
+    if verbose >= 1:
+        print('Training VAE')
+    pt_records = prepare_mmap(data_folder, patient_ids, verbose)
+    with torch.autograd.detect_anomaly():
+        train_vae(pt_records, model_folder, verbose)
+
+    # Extract the features and labels.
+    if verbose >= 1:
+        print('Extracting features and labels from the Challenge data...')
+
+    features = list()
+
+    for i in range(num_patients):
+        if verbose >= 2:
+            print('    {}/{}...'.format(i+1, num_patients))
+
+        current_features = get_features(data_folder, patient_ids[i])
+        features.append(current_features)
+
+    features = np.vstack(features)
 
     # Train the models.
     if verbose >= 1:
@@ -135,7 +152,141 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
 ################################################################################
 
 def get_latents(vae: VanillaVAE, data_folder, patient_id):
-    pass
+    recording_ids = find_recording_files(data_folder, patient_id)
+    num_recordings = len(recording_ids)
+    if num_recordings > 0:
+        for recording_id in recording_ids:
+            recording_location = os.path.join(data_folder, patient_id, '{}_{}'.format(recording_id, group))
+
+def split_recordings(pt_records, WINDOW_LEN):
+    '''splits every row of pt_records, which represents a single 30-second
+    recording, into multiple segments of length WINDOW_LEN'''
+    train_idx = []
+    for _, row in pt_records.dropna().iterrows():
+        for i in np.arange(0, 30_000-WINDOW_LEN, WINDOW_LEN):
+            train_idx.append((row['Folder'], row['Record'], i))
+    rng = np.random.default_rng(seed=42)
+    rng.shuffle(train_idx)
+    return train_idx
+
+
+def prepare_mmap(data_folder, patient_ids, verbose=1, force_reload=False):
+    if verbose >= 1:
+        print('Loading patient records...')
+    records = []
+    folders = []
+    for patient_id in patient_ids:
+        rec = find_recording_files(data_folder, patient_id)
+        records += rec
+        folders += [str(os.path.join(data_folder, patient_id)).replace('\\', '/')] * len(rec)
+    pt_records = pd.DataFrame({'Record': records, 'Folder': folders})
+    pt_records.reset_index(drop=True, inplace=True)
+    # the CSV's have blank rows for hours with no recording
+    pt_records = pt_records.dropna()
+    if verbose >= 1:
+        print('Done loading patient records')
+
+    if not force_reload and os.path.exists('sigdata.npy'):
+        if verbose >= 1:
+            print('Using old memmap')
+        return pt_records
+
+    if verbose >= 1:
+        print('Building memmap...')
+    # get unique records in the train dataset
+    records_idx = pt_records[['Folder', 'Record']].reset_index(drop=True)
+    # makes 'index' a column that we can lookup based on the Record
+    record_lookup = records_idx.reset_index().set_index('Record')
+    
+    # load records into a memmap
+    # fixed cost of 160 s to save load times by 30-40% per batch later
+    mmap = np.memmap('sigdata.npy', mode='w+', shape=(len(records_idx), 30000, len(wandb.config.channels)), dtype='float32')
+    scaler = RobustScaler(quantile_range=(10,90))
+    for i, row in records_idx.iterrows():
+        rec = wfdb.rdrecord(os.path.join(row['Folder'], row['Record']), 
+                            channel_names=wandb.config.channels)
+        # only read first 5 min
+        sig = rec.p_signal[:30_000,:]
+        mmap[i] = scaler.fit_transform(sig)
+    # assumes that all recordings have same sig_names in same order
+    sig_names = rec.sig_name
+    with open('sig_names.json', 'w') as f:
+        f.write(json.dumps(sig_names))
+    if verbose >= 1:
+        print('Done building memmap')
+
+    return pt_records
+
+
+def build_batch(train_idx, mmap, record_lookup, first_idx, BATCH_CNT, WINDOW_LEN):
+    '''returns a tensor-ified batch using the information in the rows
+    of train_idx to get the EEG data from rows first_idx to first_idx+BATCH_CNT'''
+    df_batch = np.array([])
+    for b in range(BATCH_CNT):
+        scaled_sig = mmap[record_lookup.loc[train_idx[first_idx+b][1]]['index']]
+        # which index of the recording to start the window at
+        start_idx = train_idx[first_idx+b][2]
+        df_batch = np.append(df_batch,
+                             scaled_sig[start_idx:start_idx+WINDOW_LEN])
+    df_batch = df_batch.reshape(BATCH_CNT, WINDOW_LEN, len(wandb.config.channels))
+    return torch.tensor(np.transpose(df_batch,axes=[0,2,1])).float()
+
+def train_vae(pt_records, model_folder, verbose=1):
+    # to prevent running for too long
+    start = time.time()
+
+    wandb.config.kld_weight_beta = 0.05
+    wandb.config.latent_dim = 400
+    wandb.config.epochs = 1
+    wandb.config.learning_rate = 1e-5
+    wandb.config.momentum = 0.8
+    wandb.config.batch_size = 64
+    wandb.config.window_len = 1024
+    wandb.config.alpha = 0.001 # increases weight of amp_shift_loss
+    wandb.config.gamma = 0.001 # increases weight of amp_loss
+    
+    vae = VanillaVAE(len(wandb.config.channels), wandb.config.latent_dim, wandb.config.window_len, 
+                     hidden_dims=[128,256,512])
+    optim = torch.optim.SGD(vae.parameters(), lr=wandb.config.learning_rate, momentum=wandb.config.momentum) # eps=wandb.config.learning_rate*1e-5)
+    
+    # get unique records in the train dataset
+    records_idx = pt_records[['Folder', 'Record']].reset_index(drop=True)
+    # makes 'index' a column that we can lookup based on the Record
+    record_lookup = records_idx.reset_index().set_index('Record')
+
+    # load records into a memmap
+    # fixed cost of 160 s to save load times by 30-40% per batch later
+    mmap = np.memmap('sigdata.npy', mode='r', shape=(len(records_idx), 30000, len(wandb.config.channels)), dtype='float32')
+    
+    # number of frames in one window (sampled at 100 Hz)
+    WINDOW_LEN = wandb.config.window_len
+    # number of windows in one batch
+    BATCH_CNT = wandb.config.batch_size
+    for epoch in range(wandb.config.epochs):
+        train_idx = split_recordings(pt_records, WINDOW_LEN)
+
+        batch_num = 0
+        for i in range(0, len(train_idx)-BATCH_CNT, BATCH_CNT):
+            optim.zero_grad()
+            
+            # train for 10 hrs max to avoid going over the limit
+            if time.time() > start + 3600 * 10:
+                break
+            
+            inp = build_batch(train_idx, mmap, record_lookup, i, BATCH_CNT, WINDOW_LEN)
+            rand_prob = torch.rand(BATCH_CNT)
+            out = vae(inp, rand_prob)
+            loss_vars = vae.loss_function(*out, debug=False, batch_size=BATCH_CNT, rand_prob=rand_prob)
+            loss = loss_vars['loss']
+            if verbose >= 2:
+                print(f"batch {batch_num}: loss = {loss}")
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(vae.parameters(), 250)
+            optim.step()
+            batch_num += 1
+                
+    torch.save(vae.state_dict(), os.path.join(model_folder, 'vae.pth'))
+    
 
 # Save your trained model.
 def save_challenge_model(model_folder, imputer, outcome_model, cpc_model, vae):
@@ -183,8 +334,6 @@ def preprocess_data(data, sampling_frequency, utility_frequency):
 def get_features(data_folder, patient_id):
     # Load patient data.
     patient_metadata = load_challenge_data(data_folder, patient_id)
-    recording_ids = find_recording_files(data_folder, patient_id)
-    num_recordings = len(recording_ids)
 
     # Extract patient features.
     patient_features = get_patient_features(patient_metadata)
@@ -193,44 +342,9 @@ def get_features(data_folder, patient_id):
     eeg_channels = ['F3', 'P3', 'F4', 'P4']
     group = 'EEG'
 
-    if num_recordings > 0:
-        recording_id = recording_ids[-1]
-        recording_location = os.path.join(data_folder, patient_id, '{}_{}'.format(recording_id, group))
-        if os.path.exists(recording_location + '.hea'):
-            data, channels, sampling_frequency = load_recording_data(recording_location, check_values=False)
-            utility_frequency = get_utility_frequency(recording_location + '.hea')
-
-            if all(channel in channels for channel in eeg_channels):
-                data, channels = reduce_channels(data, channels, eeg_channels)
-                data, sampling_frequency = preprocess_data(data, sampling_frequency, utility_frequency)
-                data = np.array([data[0, :] - data[1, :], data[2, :] - data[3, :]]) # Convert to bipolar montage: F3-P3 and F4-P4
-                eeg_features = get_eeg_features(data, sampling_frequency).flatten()
-            else:
-                eeg_features = float('nan') * np.ones(8) # 2 bipolar channels * 4 features / channel
-        else:
-            eeg_features = float('nan') * np.ones(8) # 2 bipolar channels * 4 features / channel
-    else:
-        eeg_features = float('nan') * np.ones(8) # 2 bipolar channels * 4 features / channel
-
     # Extract ECG features.
     ecg_channels = ['ECG', 'ECGL', 'ECGR', 'ECG1', 'ECG2']
     group = 'ECG'
-
-    if num_recordings > 0:
-        recording_id = recording_ids[0]
-        recording_location = os.path.join(data_folder, patient_id, '{}_{}'.format(recording_id, group))
-        if os.path.exists(recording_location + '.hea'):
-            data, channels, sampling_frequency = load_recording_data(recording_location, check_values=False)
-            utility_frequency = get_utility_frequency(recording_location + '.hea')
-
-            data, channels = reduce_channels(data, channels, ecg_channels)
-            data, sampling_frequency = preprocess_data(data, sampling_frequency, utility_frequency)
-            features = get_ecg_features(data)
-            ecg_features = expand_channels(features, channels, ecg_channels).flatten()
-        else:
-            ecg_features = float('nan') * np.ones(10) # 5 channels * 2 features / channel
-    else:
-        ecg_features = float('nan') * np.ones(10) # 5 channels * 2 features / channel
 
     # Extract features.
     # return np.hstack((patient_features, eeg_features, ecg_features))

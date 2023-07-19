@@ -30,10 +30,10 @@ def find_recording_files(data_folder, patient_id):
     record_names = list()
     patient_folder = os.path.join(data_folder, patient_id)
     for file_name in sorted(os.listdir(patient_folder)):
-        if not file_name.startswith('.') and file_name.endswith('.hea'):
+        # Adel added EEG
+        if not file_name.startswith('.') and file_name.endswith('EEG.hea'):
             root, ext = os.path.splitext(file_name)
-            record_name = '_'.join(root.split('_')[:-1])
-            record_names.append(record_name)
+            record_names.append(root)
     return sorted(record_names)
 
 # Load the WFDB data for the Challenge (but not all possible WFDB files).
