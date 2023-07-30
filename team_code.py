@@ -64,8 +64,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
     if verbose >= 1:
         print('Training VAE')
     pt_records = prepare_mmap(data_folder, model_folder, patient_ids, verbose)
-    with torch.autograd.detect_anomaly():
-        train_vae(pt_records, model_folder, verbose)
+    vae = train_vae(pt_records, model_folder, verbose)
 
     # Extract the features and labels.
     if verbose >= 1:
@@ -154,6 +153,7 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
 def get_latents(vae: VanillaVAE, data_folder, patient_id):
     recording_ids = find_recording_files(data_folder, patient_id)
     num_recordings = len(recording_ids)
+    group = 'EEG' # could also be 'ECG'
     if num_recordings > 0:
         for recording_id in recording_ids:
             recording_location = os.path.join(data_folder, patient_id, '{}_{}'.format(recording_id, group))
@@ -284,6 +284,7 @@ def train_vae(pt_records, model_folder, verbose=1):
             batch_num += 1
                 
     torch.save(vae.state_dict(), os.path.join(model_folder, 'vae.pth'))
+    return vae
     
 
 # Save your trained model.
