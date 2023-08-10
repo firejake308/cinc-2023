@@ -101,7 +101,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
         n_estimators=n_estimators, max_leaf_nodes=max_leaf_nodes, random_state=random_state).fit(features, cpcs.ravel())
 
     # Save the models.
-    save_challenge_model(model_folder, imputer, outcome_model, cpc_model)
+    save_challenge_model(model_folder, imputer, outcome_model, cpc_model, vae)
 
     if verbose >= 1:
         print('Done.')
