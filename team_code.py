@@ -117,6 +117,7 @@ def load_challenge_models(model_folder, verbose):
     with open(fname2, 'rb') as f:
         vae.load_state_dict(torch.load(f))
     models_dict['vae'] = vae
+    return models_dict
     
 
 # Run your trained models. This function is *required*. You should edit this function to add your code, but do *not* change the
