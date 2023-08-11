@@ -12,6 +12,7 @@
 import numpy as np, os, sys, time, json
 import pandas as pd
 import mne
+from scipy.stats import linregress
 from sklearn.impute import SimpleImputer
 from sklearn.ensemble import RandomForestClassifier, RandomForestRegressor
 import joblib
@@ -112,7 +113,7 @@ def load_challenge_models(model_folder, verbose):
     filename = os.path.join(model_folder, 'models.sav')
     models_dict = joblib.load(filename)
     fname2 = os.path.join(model_folder, 'vae.pth')
-    vae = VanillaVAE(18, 400, 1024, [512])
+    vae = VanillaVAE(len(wandb.config.channels), 400, 1024, [512])
     with open(fname2, 'rb') as f:
         vae.load_state_dict(torch.load(f))
     models_dict['vae'] = vae
@@ -129,6 +130,46 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
     # Extract features.
     features = get_features(data_folder, patient_id)
     features = features.reshape(1, -1)
+
+    if verbose >= 1:
+        print('Loading patient records...')
+    records = find_recording_files(data_folder, patient_id)
+    if verbose >= 1:
+        print('Done loading patient records')
+
+    with torch.no_grad():
+        scaler = RobustScaler(quantile_range=(10, 90))
+        WINDOW_LEN = 1024
+        pt_dir = os.path.join(data_folder, patient_id)
+        if verbose >= 2:
+            print(f"Found {len(records)} records")
+        rec_latents = []
+        rec_hrs = []
+        for record_num in records:
+            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num))
+            sig = rec.p_signal
+            scaled_sig = scaler.fit_transform(sig)
+            df_batch = np.array([])
+            for start_idx in range(0, len(sig)-WINDOW_LEN, WINDOW_LEN):
+                df_batch = np.append(df_batch,
+                                    scaled_sig[start_idx:start_idx+WINDOW_LEN])
+            df_batch = df_batch.reshape(-1, WINDOW_LEN, 18)
+            inp = torch.tensor(np.transpose(df_batch,axes=[0,2,1])).float()
+            # returns 29 x 400 (29 x 1024-frame segments in 5-min recording)
+            out = vae.reparameterize(*vae.encode(inp))
+            # makes 1 average for the whole recording
+            rec_latents.append(torch.mean(out, axis=0).reshape(1, -1).detach())
+            rec_hrs.append(int(record_num[len('0284_001_'):-len('_EEG')]))
+
+        mean_latents = torch.mean(torch.cat(rec_latents, dim=0), dim=0)
+        
+        trend = np.array(list(map(lambda t: t.numpy(), rec_latents))).squeeze(axis=1)
+        # slope was overshadowed by rvalue, maybe intercept? if baseline diff from mean
+        linreg_bs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).intercept, 0, trend)
+        linreg_rs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).rvalue, 0, trend)
+
+    print(features.shape, mean_latents.shape, linreg_bs.shape)
+    features = np.concatenate((features, mean_latents, linreg_bs, linreg_rs), axis=1)
 
     # Impute missing data.
     features = imputer.transform(features)
