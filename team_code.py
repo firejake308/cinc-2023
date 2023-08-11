@@ -269,8 +269,8 @@ def train_vae(pt_records, model_folder, verbose=1):
         for i in range(0, len(train_idx)-BATCH_CNT, BATCH_CNT):
             optim.zero_grad()
             
-            # train for 10 hrs max to get rough results, final code should respect 72-hr limit
-            if time.time() > start + 3600 * 10:
+            # train for 24 hrs max to get rough results, final code should respect 72-hr limit
+            if time.time() > start + 3600 * 24:
                 break
             
             inp = build_batch(train_idx, mmap, record_lookup, i, BATCH_CNT, WINDOW_LEN)
