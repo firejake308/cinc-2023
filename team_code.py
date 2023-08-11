@@ -382,7 +382,7 @@ def get_features(data_folder, patient_id, vae):
     # need to unsqueeze dim 0 before concat
     # also need to do the same during training instead of throwing away latents
     features = np.concatenate(
-            (features, 
+            (patient_features, 
              mean_latents.unsqueeze(0).numpy(), 
              linreg_bs.reshape(1, -1), 
              linreg_rs.reshape(1, -1)), 
