@@ -154,7 +154,7 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
             for start_idx in range(0, len(sig)-WINDOW_LEN, WINDOW_LEN):
                 df_batch = np.append(df_batch,
                                     scaled_sig[start_idx:start_idx+WINDOW_LEN])
-            df_batch = df_batch.reshape(-1, WINDOW_LEN, 18)
+            df_batch = df_batch.reshape(-1, WINDOW_LEN, len(wandb.config.channels))
             inp = torch.tensor(np.transpose(df_batch,axes=[0,2,1])).float()
             # returns 29 x 400 (29 x 1024-frame segments in 5-min recording)
             out = vae.reparameterize(*vae.encode(inp))
