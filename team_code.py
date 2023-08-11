@@ -383,10 +383,9 @@ def get_features(data_folder, patient_id, vae):
     # also need to do the same during training instead of throwing away latents
     features = np.concatenate(
             (patient_features, 
-             mean_latents.unsqueeze(0).numpy(), 
-             linreg_bs.reshape(1, -1), 
-             linreg_rs.reshape(1, -1)), 
-            axis=1)
+             mean_latents.numpy(), 
+             linreg_bs, 
+             linreg_rs))
 
     # Extract ECG features.
     ecg_channels = ['ECG', 'ECGL', 'ECGR', 'ECG1', 'ECG2']
@@ -395,7 +394,7 @@ def get_features(data_folder, patient_id, vae):
     # Extract features.
     # return np.hstack((patient_features, eeg_features, ecg_features))
     # TODO restore eeg and ecg features
-    return patient_features
+    return features
 
 # Extract patient features from the data.
 def get_patient_features(data):
