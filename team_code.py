@@ -147,14 +147,18 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
         rec_latents = []
         rec_hrs = []
         for record_num in records:
-            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num))
+            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num),
+                                   channel_names=wandb.config.channels)
             sig = rec.p_signal
             scaled_sig = scaler.fit_transform(sig)
-            df_batch = np.array([])
-            for start_idx in range(0, len(sig)-WINDOW_LEN, WINDOW_LEN):
-                df_batch = np.append(df_batch,
-                                    scaled_sig[start_idx:start_idx+WINDOW_LEN])
-            df_batch = df_batch.reshape(-1, WINDOW_LEN, len(wandb.config.channels))
+            # scaled_sig should have shape (length, channels)
+            #df_batch = np.array([])
+            #for start_idx in range(0, len(sig)-WINDOW_LEN, WINDOW_LEN):
+            #    df_batch = np.append(df_batch,
+            #                        scaled_sig[start_idx:start_idx+WINDOW_LEN])
+            sig_len = scaled_sig.shape[0]
+            usable_len = sig_len - (sig_len % WINDOW_LEN)
+            df_batch = scaled_sig[:usable_len,:].reshape(-1, WINDOW_LEN, len(wandb.config.channels))
             inp = torch.tensor(np.transpose(df_batch,axes=[0,2,1])).float()
             # returns 29 x 400 (29 x 1024-frame segments in 5-min recording)
             out = vae.reparameterize(*vae.encode(inp))
@@ -170,7 +174,15 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
         linreg_rs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).rvalue, 0, trend)
 
     print(features.shape, mean_latents.shape, linreg_bs.shape)
-    features = np.concatenate((features, mean_latents, linreg_bs, linreg_rs), axis=1)
+    # TODO 8/11/23 - above line prints (1,8) torch.Size([400]), (400,)
+    # need to unsqueeze dim 1 before concat
+    # also need to do the same during training instead of throwing away latents
+    features = np.concatenate(
+            (features, 
+             mean_latents.unsqueeze(0).numpy(), 
+             linreg_bs.reshape(1, -1), 
+             linreg_rs.reshape(1, -1)), 
+            axis=1)
 
     # Impute missing data.
     features = imputer.transform(features)
