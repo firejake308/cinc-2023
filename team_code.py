@@ -77,7 +77,7 @@ def train_challenge_model(data_folder, model_folder, verbose):
         if verbose >= 2:
             print('    {}/{}...'.format(i+1, num_patients))
 
-        current_features = get_features(data_folder, patient_ids[i])
+        current_features = get_features(data_folder, patient_ids[i], vae)
         features.append(current_features)
 
     features = np.vstack(features)
@@ -129,60 +129,8 @@ def run_challenge_models(models, data_folder, patient_id, verbose):
     vae = models['vae']
 
     # Extract features.
-    features = get_features(data_folder, patient_id)
+    features = get_features(data_folder, patient_id, vae)
     features = features.reshape(1, -1)
-
-    if verbose >= 1:
-        print('Loading patient records...')
-    records = find_recording_files(data_folder, patient_id)
-    if verbose >= 1:
-        print('Done loading patient records')
-
-    with torch.no_grad():
-        scaler = RobustScaler(quantile_range=(10, 90))
-        WINDOW_LEN = 1024
-        pt_dir = os.path.join(data_folder, patient_id)
-        if verbose >= 2:
-            print(f"Found {len(records)} records")
-        rec_latents = []
-        rec_hrs = []
-        for record_num in records:
-            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num),
-                                   channel_names=wandb.config.channels)
-            sig = rec.p_signal
-            scaled_sig = scaler.fit_transform(sig)
-            # scaled_sig should have shape (length, channels)
-            #df_batch = np.array([])
-            #for start_idx in range(0, len(sig)-WINDOW_LEN, WINDOW_LEN):
-            #    df_batch = np.append(df_batch,
-            #                        scaled_sig[start_idx:start_idx+WINDOW_LEN])
-            sig_len = scaled_sig.shape[0]
-            usable_len = sig_len - (sig_len % WINDOW_LEN)
-            df_batch = scaled_sig[:usable_len,:].reshape(-1, WINDOW_LEN, len(wandb.config.channels))
-            inp = torch.tensor(np.transpose(df_batch,axes=[0,2,1])).float()
-            # returns 29 x 400 (29 x 1024-frame segments in 5-min recording)
-            out = vae.reparameterize(*vae.encode(inp))
-            # makes 1 average for the whole recording
-            rec_latents.append(torch.mean(out, axis=0).reshape(1, -1).detach())
-            rec_hrs.append(int(record_num[len('0284_001_'):-len('_EEG')]))
-
-        mean_latents = torch.mean(torch.cat(rec_latents, dim=0), dim=0)
-        
-        trend = np.array(list(map(lambda t: t.numpy(), rec_latents))).squeeze(axis=1)
-        # slope was overshadowed by rvalue, maybe intercept? if baseline diff from mean
-        linreg_bs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).intercept, 0, trend)
-        linreg_rs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).rvalue, 0, trend)
-
-    print(features.shape, mean_latents.shape, linreg_bs.shape)
-    # TODO 8/11/23 - above line prints (1,8) torch.Size([400]), (400,)
-    # need to unsqueeze dim 1 before concat
-    # also need to do the same during training instead of throwing away latents
-    features = np.concatenate(
-            (features, 
-             mean_latents.unsqueeze(0).numpy(), 
-             linreg_bs.reshape(1, -1), 
-             linreg_rs.reshape(1, -1)), 
-            axis=1)
 
     # Impute missing data.
     features = imputer.transform(features)
@@ -384,7 +332,7 @@ def preprocess_data(data, sampling_frequency, utility_frequency):
     return data, resampling_frequency
 
 # Extract features.
-def get_features(data_folder, patient_id):
+def get_features(data_folder, patient_id, vae):
     # Load patient data.
     patient_metadata = load_challenge_data(data_folder, patient_id)
 
@@ -392,8 +340,53 @@ def get_features(data_folder, patient_id):
     patient_features = get_patient_features(patient_metadata)
 
     # Extract EEG features.
-    eeg_channels = ['F3', 'P3', 'F4', 'P4']
+    eeg_channels = wandb.config.channels
     group = 'EEG'
+
+    records = find_recording_files(data_folder, patient_id)
+    with torch.no_grad():
+        scaler = RobustScaler(quantile_range=(10, 90))
+        WINDOW_LEN = 1024
+        pt_dir = os.path.join(data_folder, patient_id)
+        rec_latents = []
+        rec_hrs = []
+        for record_num in records:
+            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num),
+                                   channel_names=wandb.config.channels)
+            sig = rec.p_signal
+            scaled_sig = scaler.fit_transform(sig)
+            # scaled_sig should have shape (length, channels)
+            #df_batch = np.array([])
+            #for start_idx in range(0, len(sig)-WINDOW_LEN, WINDOW_LEN):
+            #    df_batch = np.append(df_batch,
+            #                        scaled_sig[start_idx:start_idx+WINDOW_LEN])
+            sig_len = scaled_sig.shape[0]
+            usable_len = sig_len - (sig_len % WINDOW_LEN)
+            df_batch = scaled_sig[:usable_len,:].reshape(-1, WINDOW_LEN, len(wandb.config.channels))
+            inp = torch.tensor(np.transpose(df_batch,axes=[0,2,1])).float()
+            # returns 29 x 400 (29 x 1024-frame segments in 5-min recording)
+            out = vae.reparameterize(*vae.encode(inp))
+            # makes 1 average for the whole recording
+            rec_latents.append(torch.mean(out, axis=0).reshape(1, -1).detach())
+            rec_hrs.append(int(record_num[len('0284_001_'):-len('_EEG')]))
+
+        mean_latents = torch.mean(torch.cat(rec_latents, dim=0), dim=0)
+        
+        trend = np.array(list(map(lambda t: t.numpy(), rec_latents))).squeeze(axis=1)
+        # slope was overshadowed by rvalue, maybe intercept? if baseline diff from mean
+        linreg_bs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).intercept, 0, trend)
+        linreg_rs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).rvalue, 0, trend)
+
+    # print(features.shape, mean_latents.shape, linreg_bs.shape)
+    # TODO 8/11/23 - above line prints (1,8) torch.Size([400]), (400,)
+    # need to unsqueeze dim 0 before concat
+    # also need to do the same during training instead of throwing away latents
+    features = np.concatenate(
+            (features, 
+             mean_latents.unsqueeze(0).numpy(), 
+             linreg_bs.reshape(1, -1), 
+             linreg_rs.reshape(1, -1)), 
+            axis=1)
 
     # Extract ECG features.
     ecg_channels = ['ECG', 'ECGL', 'ECGR', 'ECG1', 'ECG2']
