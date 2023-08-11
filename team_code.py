@@ -113,7 +113,7 @@ def load_challenge_models(model_folder, verbose):
     filename = os.path.join(model_folder, 'models.sav')
     models_dict = joblib.load(filename)
     fname2 = os.path.join(model_folder, 'vae.pth')
-    vae = VanillaVAE(len(wandb.config.channels), 400, 1024, [512])
+    vae = VanillaVAE(len(wandb.config.channels), 400, 1024, [128,256,512])
     with open(fname2, 'rb') as f:
         vae.load_state_dict(torch.load(f))
     models_dict['vae'] = vae
