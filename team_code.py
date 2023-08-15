@@ -181,7 +181,6 @@ def prepare_mmap(data_folder, model_folder, patient_ids, verbose=1, force_reload
         rec = find_recording_files(data_folder, patient_id)
         records += [r + '_EEG' for r in rec]
         folders += [str(os.path.join(data_folder, patient_id)).replace('\\', '/')] * len(rec)
-    print(records)
     pt_records = pd.DataFrame({'Record': records, 'Folder': folders})
     pt_records.reset_index(drop=True, inplace=True)
     # the CSV's have blank rows for hours with no recording
