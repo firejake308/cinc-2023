@@ -210,7 +210,7 @@ def prepare_mmap(data_folder, model_folder, patient_ids, verbose=1, force_reload
                             channel_names=wandb.config.channels)
         # only read first 5 min
         sig = rec.p_signal[:30_000,:]
-        mmap[i] = scaler.fit_transform(sig)
+        mmap[i] = np.pad(scaler.fit_transform(sig), pad_width=((0, 30_000 - sig.shape[0]), (0, 0)))
     if verbose >= 1:
         print('Done building memmap')
 
