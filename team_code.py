@@ -351,7 +351,7 @@ def get_features(data_folder, patient_id, vae):
         rec_latents = []
         rec_hrs = []
         for record_num in records:
-            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num),
+            rec = wfdb.io.rdrecord(os.path.join(pt_dir, record_num + '_EEG'),
                                    channel_names=wandb.config.channels)
             sig = rec.p_signal
             scaled_sig = scaler.fit_transform(sig)
