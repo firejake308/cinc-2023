@@ -368,7 +368,7 @@ def get_features(data_folder, patient_id, vae):
             out = vae.reparameterize(*vae.encode(inp))
             # makes 1 average for the whole recording
             rec_latents.append(torch.mean(out, axis=0).reshape(1, -1).detach())
-            rec_hrs.append(int(record_num[len('0284_001_'):-len('_EEG')]))
+            rec_hrs.append(int(record_num[len('0284_001_'):]))
 
         mean_latents = torch.mean(torch.cat(rec_latents, dim=0), dim=0)
         
