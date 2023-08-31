@@ -369,13 +369,18 @@ def get_features(data_folder, patient_id, vae):
             # makes 1 average for the whole recording
             rec_latents.append(torch.mean(out, axis=0).reshape(1, -1).detach())
             rec_hrs.append(int(record_num[len('0284_001_'):]))
-
-        mean_latents = torch.mean(torch.cat(rec_latents, dim=0), dim=0)
         
-        trend = np.array(list(map(lambda t: t.numpy(), rec_latents))).squeeze(axis=1)
-        # slope was overshadowed by rvalue, maybe intercept? if baseline diff from mean
-        linreg_bs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).intercept, 0, trend)
-        linreg_rs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).rvalue, 0, trend)
+        try:
+            mean_latents = torch.mean(torch.cat(rec_latents, dim=0), dim=0)
+            trend = np.array(list(map(lambda t: t.numpy(), rec_latents))).squeeze(axis=1)
+            # slope was overshadowed by rvalue, maybe intercept? if baseline diff from mean
+            linreg_bs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).intercept, 0, trend)
+            linreg_rs = np.apply_along_axis(lambda y: linregress(rec_hrs, y).rvalue, 0, trend)
+        except:
+            # handle case where there are no recordings for a patient, fow whatever reason
+            mean_latents = torch.zeros(400)
+            linreg_bs = np.zeros(400)
+            linreg_rs = np.zeros(400)
 
     # print(features.shape, mean_latents.shape, linreg_bs.shape)
     # TODO 8/11/23 - above line prints (1,8) torch.Size([400]), (400,)
